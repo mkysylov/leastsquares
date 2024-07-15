@@ -410,13 +410,27 @@ impl<const N: usize> RegressionResult<N> {
         self.sse / (self.nobs as f64 - self.rank as f64)
     }
 
-    pub fn r_squared(&self, has_constant: bool) -> f64 {
-        let sst = if has_constant {
+    pub fn sst(&self, has_constant: bool) -> f64 {
+        if has_constant {
             self.sumysq - self.sumy * self.sumy / self.nobs as f64
         } else {
             self.sumysq
-        };
-        1.0 - self.sse / sst
+        }
+    }
+
+    pub fn r_squared(&self, has_constant: bool) -> f64 {
+        1.0 - self.sse / self.sst(has_constant)
+    }
+
+    pub fn adjusted_r_squared(&self, has_constant: bool) -> f64 {
+        if has_constant {
+            let sst = self.sst(has_constant);
+            1.0 - (self.sse * (self.nobs as f64 - 1.0))
+                / (sst * (self.nobs as f64 - self.rank as f64))
+        } else {
+            let r_squared = self.r_squared(has_constant);
+            1.0 - (1.0 - r_squared) * (self.nobs as f64 / (self.nobs as f64 - self.rank as f64))
+        }
     }
 }
 
@@ -629,5 +643,85 @@ mod tests {
         assert!((0.957478440825662 - result.r_squared(true)).abs() < 1.0e-10);
         assert!((55702845333.3333 - result.mse()).abs() < 1.0e-4);
         assert!((835542680000.000 - result.sse).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn longley_with_constant() {
+        let data: [f64; 112] = include!("datasets/langley.in");
+
+        let mut instance = MillerUpdatingRegression::<7>::empty(f64::EPSILON);
+        for i in 0..data.len() / 7 {
+            let x: [f64; 7] = core::array::from_fn(|j| if j == 0 { 1.0 } else { data[i * 7 + j] });
+            instance.add_observation(x, data[i * 7]);
+        }
+        let result = instance.regress();
+
+        assert!(zip(
+            [
+                -3482258.63459582,
+                15.0618722713733,
+                -0.358191792925910E-01,
+                -2.02022980381683,
+                -1.03322686717359,
+                -0.511041056535807E-01,
+                1829.15146461355
+            ],
+            result.parameters
+        )
+        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
+        assert!(zip(
+            [
+                890420.383607373,
+                84.9149257747669,
+                0.334910077722432E-01,
+                0.488399681651699,
+                0.214274163161675,
+                0.226073200069370,
+                455.478499142212
+            ],
+            result.stderr()
+        )
+        .all(|(expected, actual)| (expected - actual).abs() < 1e-6));
+        assert!((0.995479004577296 - result.r_squared(true)).abs() < 1.0e-12);
+        assert!((0.992465007628826 - result.adjusted_r_squared(true)).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn longley_without_constant() {
+        let data: [f64; 112] = include!("datasets/langley.in");
+
+        let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
+        for i in 0..data.len() / 7 {
+            let x: [f64; 6] = core::array::from_fn(|j| data[i * 7 + 1 + j]);
+            instance.add_observation(x, data[i * 7]);
+        }
+        let result = instance.regress();
+
+        assert!(zip(
+            [
+                -52.99357013868291,
+                0.07107319907358,
+                -0.42346585566399,
+                -0.57256866841929,
+                -0.41420358884978,
+                48.41786562001326
+            ],
+            result.parameters
+        )
+        .all(|(expected, actual)| (expected - actual).abs() < 1e-11));
+        assert!(zip(
+            [
+                129.54486693117232,
+                0.03016640003786,
+                0.41773654056612,
+                0.27899087467676,
+                0.32128496193363,
+                17.68948737819961
+            ],
+            result.stderr()
+        )
+        .all(|(expected, actual)| (expected - actual).abs() < 1e-11));
+        assert!((0.9999670130706 - result.r_squared(false)).abs() < 1.0e-12);
+        assert!((0.999947220913 - result.adjusted_r_squared(false)).abs() < 1.0e-12);
     }
 }
