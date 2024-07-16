@@ -1,867 +1,271 @@
+#[cfg(test)]
+mod tests;
+
 /// Miller Updating Regression
 ///
-/// * `N`: number of variables in regression
+/// Ported from Apache Commons Math:
+/// [org.apache.commons.math3.stat.regression.MillerUpdatingRegression](https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/stat/regression/MillerUpdatingRegression.java)
+///
+/// The algorithm is described in:
+/// Algorithm AS 274: Least Squares Routines to Supplement Those of Gentleman
+/// Author(s): Alan J. Miller
+/// Source: Journal of the Royal Statistical Society.
+/// Series C (Applied Statistics), Vol. 41, No. 2
+/// (1992), pp. 458-478
+/// Published by: Blackwell Publishing for the Royal Statistical Society
+/// Stable URL: http://www.jstor.org/stable/2347583
+///
+/// Generic parameters:
+/// * `const N: usize`: number of variables in regression
 #[derive(Clone, Debug)]
 pub struct MillerUpdatingRegression<const N: usize> {
-    /// diagonals of cross products matrix
-    d: [f64; N],
-    /// the elements of the R`Y
-    rhs: [f64; N],
-    /// the off diagonal portion of the R matrix
-    r: [[f64; N]; N],
-    /// the tolerance for each of the variables
-    tol: [f64; N],
-    /// residual sum of squares for all nested regressions
-    rss: [f64; N],
-    /// number of observations entered
-    nobs: usize,
-    /// sum of squared errors of largest regression
-    sserr: f64,
-    /// has rss been called
-    rssSet: bool,
-    /// has the tolerance setting method been called
-    tolSet: bool,
-    /// flags for variables with linear dependency problems
-    lindep: [bool; N],
-    /// summation of Y variable
-    sumy: f64,
-    /// summation of squared Y values
-    sumsqy: f64,
-    /// zero tolerance
-    epsilon: f64,
+    diagonal_matrix: [f64; N],
+    upper_triangular_matrix: [[f64; N]; N],
+    scaled_projections: [f64; N],
+    num_observations: usize,
+    sum_squared_errors: f64,
+    sum_y: f64,
+    sum_squared_y: f64,
+    zero_tolerance: f64,
 }
 
 impl<const N: usize> MillerUpdatingRegression<N> {
     /// Construct en empty instance
     ///
-    /// * `error_tolerance`:  zero tolerance, how machine zero is determined
-    fn empty(error_tolerance: f64) -> MillerUpdatingRegression<N> {
+    /// Parameters:
+    /// * `zero_tolerance: f64`: threshold for machine zero
+    pub fn empty(zero_tolerance: f64) -> MillerUpdatingRegression<N> {
         MillerUpdatingRegression {
-            d: [0f64; N],
-            rhs: [0f64; N],
-            r: [[0f64; N]; N],
-            tol: [0f64; N],
-            rss: [0f64; N],
-            nobs: 0,
-            sserr: 0f64,
-            rssSet: false,
-            tolSet: false,
-            lindep: [false; N],
-            sumy: 0f64,
-            sumsqy: 0f64,
-            epsilon: error_tolerance.abs(),
+            diagonal_matrix: [0.0; N],
+            upper_triangular_matrix: [[0.0; N]; N],
+            scaled_projections: [0.0; N],
+            num_observations: 0,
+            sum_squared_errors: 0.0,
+            sum_y: 0.0,
+            sum_squared_y: 0.0,
+            zero_tolerance: zero_tolerance.abs(),
         }
     }
 
-    /**
-     * Adds an observation to the regression model.
-     * @param x the array with regressor values
-     * @param y  the value of dependent variable given these regressors
-     * @exception ModelSpecificationException if the length of {@code x} does not equal
-     * the number of independent variables in the model
-     */
+    /// Add an observation to the regression model
+    ///
+    /// Parameters:
+    /// * `x: [f64; N]`: regressor values
+    /// * `y: f64`: dependent variable
     pub fn add_observation(&mut self, x: [f64; N], y: f64) {
         self.include(x, 1.0, y);
-        self.nobs += 1
+        self.num_observations += 1
     }
 
-    /**
-     * The include method is where the QR decomposition occurs. This statement forms all
-     * intermediate data which will be used for all derivative measures.
-     * According to the miller paper, note that in the original implementation the x vector
-     * is overwritten. In this implementation, the include method is passed a copy of the
-     * original data vector so that there is no contamination of the data. Additionally,
-     * this method differs slightly from Gentleman's method, in that the assumption is
-     * of dense design matrices, there is some advantage in using the original gentleman algorithm
-     * on sparse matrices.
-     *
-     * @param x observations on the regressors
-     * @param w weight of the this observation (-1,1)
-     * @param y observation on the regressand
-     */
+    /// Update the QR decomposition with the new observation.
+    ///
+    /// Parameters:
+    /// * `x: [f64; N]`: regressors
+    /// * `w: f64`: weight
+    /// * `y: f64`: regressand
     fn include(&mut self, mut x: [f64; N], mut w: f64, mut y: f64) {
-        let mut dpi = 0f64;
-        let mut xk = 0f64;
-        self.rssSet = false;
-        self.sumy = Self::smartAdd(y, self.sumy);
-        self.sumsqy = Self::smartAdd(self.sumsqy, y * y);
+        self.sum_y += y;
+        self.sum_squared_y += y * y;
 
         for i in 0..N {
-            if w == 0.0 {
+            if w.abs() < self.zero_tolerance {
                 return;
             }
-            let xi = x[i];
 
-            if xi == 0.0 {
+            if x[i].abs() < self.zero_tolerance {
                 continue;
             }
-            let di = self.d[i];
-            let wxi = w * xi;
-            let wPrev = w;
-            if di != 0.0 {
-                dpi = Self::smartAdd(di, wxi * xi);
-                let tmp = wxi * xi / di;
-                if tmp.abs() > f64::EPSILON {
-                    w = (di * w) / dpi;
-                }
-            } else {
-                dpi = wxi * xi;
-                w = 0.0;
-            }
-            self.d[i] = dpi;
+
+            let wxi = w * x[i];
+            let dpi = self.diagonal_matrix[i] + wxi * x[i];
+
             for k in i + 1..N {
-                xk = x[k];
-                x[k] = Self::smartAdd(xk, -xi * self.r[i][k]);
-                if di != 0.0 {
-                    self.r[i][k] = Self::smartAdd(di * self.r[i][k], (wPrev * xi) * xk) / dpi;
-                } else {
-                    self.r[i][k] = xk / xi;
-                }
+                let xk_prev = x[k];
+                x[k] -= x[i] * self.upper_triangular_matrix[i][k];
+                self.upper_triangular_matrix[i][k] = (self.diagonal_matrix[i] * self.upper_triangular_matrix[i][k] + wxi * xk_prev) / dpi;
             }
-            xk = y;
-            y = Self::smartAdd(xk, -xi * self.rhs[i]);
-            if di != 0.0 {
-                self.rhs[i] = Self::smartAdd(di * self.rhs[i], wxi * xk) / dpi;
-            } else {
-                self.rhs[i] = xk / xi;
-            }
+
+            let y_prev = y;
+            y -= x[i] * self.scaled_projections[i];
+            self.scaled_projections[i] = (self.diagonal_matrix[i] * self.scaled_projections[i] + wxi * y_prev) / dpi;
+
+            w *= self.diagonal_matrix[i] / dpi;
+            self.diagonal_matrix[i] = dpi;
         }
-        self.sserr = Self::smartAdd(self.sserr, w * y * y);
+
+        self.sum_squared_errors += w * y * y;
     }
 
-    /**
-     * Adds to number a and b such that the contamination due to
-     * numerical smallness of one addend does not corrupt the sum.
-     * @param a - an addend
-     * @param b - an addend
-     * @return the sum of the a and b
-     */
-    fn smartAdd(a: f64, b: f64) -> f64 {
-        let aa = a.abs();
-        let ba = b.abs();
-        if aa > ba {
-            let eps = aa * f64::EPSILON;
-            if ba > eps {
-                return a + b;
-            }
-            return a;
-        } else {
-            let eps = ba * f64::EPSILON;
-            if aa > eps {
-                return a + b;
-            }
-            return b;
-        }
-    }
-
-    pub fn regress(&mut self) -> RegressionResult<N> {
-        if self.nobs <= N {
+    /// Conduct a regression on the data in the model
+    pub fn regress(&self) -> RegressionResult<N> {
+        if self.num_observations <= N {
             // NOT_ENOUGH_DATA_FOR_NUMBER_OF_PREDICTORS("not enough data ({0} rows) for this many predictors ({1} predictors)"),
         }
 
-        self.tolset();
-        self.singcheck();
-        let beta = self.regcf();
+        let mut regression = self.clone();
+        let sqrt_diagonal_matrix: [f64; N] = core::array::from_fn(|i| regression.diagonal_matrix[i].sqrt());
 
-        self.ss();
+        // calculate tolerances for singularity testing
+        let tolerances: [f64; N] = core::array::from_fn(|col| {
+            let total = (0..col).fold(sqrt_diagonal_matrix[col], |acc, row| {
+                acc + regression.upper_triangular_matrix[row][col].abs() * sqrt_diagonal_matrix[row]
+            });
+            regression.zero_tolerance * total
+        });
 
-        let cov = self.cov();
+        // check for singularities and eliminate the offending columns
+        let linear_dependencies: [bool; N] = core::array::from_fn(|col| {
+            let tolerance = tolerances[col];
 
-        let mut rnk = 0;
-        for i in 0..N {
-            if !self.lindep[i] {
-                rnk += 1;
+            // set elements within R to zero if they are less than `tolerance` in absolute value
+            // after being scaled by the square root of their row multiplier
+            for row in 0..usize::max(col, 1) - 1 {
+                if regression.upper_triangular_matrix[row][col].abs() * sqrt_diagonal_matrix[row] < tolerance {
+                    regression.upper_triangular_matrix[row][col] = 0.0;
+                }
             }
-        }
+
+            // if diagonal element is near zero, set it to zero, use `include` to augment the
+            // projections in the lower rows of the orthogonalization, and return an appropriate
+            // linear dependency flag
+            if sqrt_diagonal_matrix[col] < tolerance {
+                if col < N - 1 {
+                    let x: [f64; N] = core::array::from_fn(|i| {
+                        let value = regression.upper_triangular_matrix[col][i];
+                        regression.upper_triangular_matrix[col][i] = 0.0;
+                        value
+                    });
+
+                    let weight = regression.diagonal_matrix[col];
+                    regression.diagonal_matrix[col] = 0.0;
+
+                    let y = regression.scaled_projections[col];
+                    regression.scaled_projections[col] = 0.0;
+
+                    regression.include(x, weight, y);
+                } else {
+                    regression.sum_squared_errors += regression.diagonal_matrix[col]
+                        * regression.scaled_projections[col]
+                        * regression.scaled_projections[col];
+                }
+
+                true
+            } else {
+                false
+            }
+        });
+
+        let valid_indices = |range: std::ops::Range<usize>| {
+            range.filter(|i| !linear_dependencies[*i])
+        };
+
+        // conduct the linear regression and extract the parameter vector
+        let parameters = {
+            let mut beta = [f64::NAN; N];
+            for i in valid_indices(0..N).rev() {
+                beta[i] = valid_indices(i + 1..N).fold(self.scaled_projections[i], |sum, j| {
+                    sum - self.upper_triangular_matrix[i][j] * beta[j]
+                })
+            }
+            beta
+        };
+
+        let rank = valid_indices(0..N).count() as u32;
+
+        // calculate the variance-covariance matrix
+        let covariance = {
+            let variance = regression.sum_squared_errors / (regression.num_observations as f64 - rank as f64);
+
+            let mut inverted_upper_triangular_matrix = [[f64::NAN; N]; N];
+            for col in valid_indices(1..N) {
+                for row in valid_indices(0..col).rev() {
+                    let total: f64 = valid_indices(row + 1..col).map(|k| {
+                        -self.upper_triangular_matrix[row][k] * inverted_upper_triangular_matrix[k][col]
+                    }).sum();
+                    inverted_upper_triangular_matrix[row][col] = total - self.upper_triangular_matrix[row][col];
+                }
+            }
+
+            let mut covmat = [[f64::NAN; N]; N];
+            for row in valid_indices(0..N) {
+                for col in valid_indices(row..N) {
+                    let subtotal: f64 = valid_indices(col + 1..N).map(|k| {
+                        inverted_upper_triangular_matrix[row][k]
+                            * inverted_upper_triangular_matrix[col][k]
+                            / self.diagonal_matrix[k]
+                    }).sum();
+
+                    let total = subtotal + if row == col {
+                        1.0 / self.diagonal_matrix[col]
+                    } else {
+                        inverted_upper_triangular_matrix[row][col] / self.diagonal_matrix[col]
+                    };
+
+                    covmat[row][col] = total * variance;
+                    covmat[col][row] = total * variance;
+                }
+            }
+            covmat
+        };
 
         RegressionResult {
-            parameters: beta,
-            varcov: cov,
-            nobs: self.nobs,
-            rank: rnk,
-            sumy: self.sumy,
-            sumysq: self.sumsqy,
-            sse: self.sserr,
+            parameters,
+            covariance,
+            num_observations: regression.num_observations,
+            rank,
+            sum_y: regression.sum_y,
+            sum_squared_y: regression.sum_squared_y,
+            sum_squared_errors: regression.sum_squared_errors,
         }
-    }
-
-    /**
-     * This sets up tolerances for singularity testing.
-     */
-    fn tolset(&mut self) {
-        let work_tolset: [f64; N] = core::array::from_fn(|i| self.d[i].sqrt());
-        self.tol[0] = self.epsilon * work_tolset[0];
-        for col in 1..N {
-            let mut total = work_tolset[col];
-            for row in 0..col {
-                total += self.r[row][col].abs() * work_tolset[row];
-            }
-            self.tol[col] = self.epsilon * total;
-        }
-        self.tolSet = true;
-    }
-
-    /**
-     * The method which checks for singularities and then eliminates the offending
-     * columns.
-     */
-    fn singcheck(&mut self) {
-        let work_sing: [f64; N] = core::array::from_fn(|i| self.d[i].sqrt());
-
-        for col in 0..N {
-            // Set elements within R to zero if they are less than tol(col) in
-            // absolute value after being scaled by the square root of their row
-            // multiplier
-            let temp = self.tol[col];
-            // for row in 0..col - 1 {
-            for row in 0..usize::max(col, 1) - 1 {
-                if self.r[row][col].abs() * work_sing[row] < temp {
-                    self.r[row][col] = 0.0;
-                }
-            }
-            // If diagonal element is near zero, set it to zero, set appropriate
-            // element of LINDEP, and use INCLUD to augment the projections in
-            // the lower rows of the orthogonalization.
-            self.lindep[col] = false;
-            if work_sing[col] < temp {
-                self.lindep[col] = true;
-                if col < N - 1 {
-                    let mut xSing = [0f64; N];
-                    for xi in col + 1..N {
-                        xSing[xi] = self.r[col][xi];
-                        self.r[col][xi] = 0.0;
-                    }
-                    let y = self.rhs[col];
-                    let weight = self.d[col];
-                    self.d[col] = 0.0;
-                    self.rhs[col] = 0.0;
-                    self.include(xSing, weight, y);
-                } else {
-                    self.sserr += self.d[col] * self.rhs[col] * self.rhs[col];
-                }
-            }
-        }
-    }
-
-    /**
-     * The regcf method conducts the linear regression and extracts the
-     * parameter vector. Notice that the algorithm can do subset regression
-     * with no alteration.
-     *
-     * @param nreq how many of the regressors to include (either in canonical
-     * order, or in the current reordered state)
-     * @return an array with the estimated slope coefficients
-     * @throws ModelSpecificationException if {@code nreq} is less than 1
-     * or greater than the number of independent variables
-     */
-    fn regcf(&mut self) -> [f64; N] {
-        if !self.tolSet {
-            self.tolset();
-        }
-        let mut ret = [0f64; N];
-        let mut rankProblem = false;
-        for i in (0..N).rev() {
-            if self.d[i].sqrt() < self.tol[i] {
-                ret[i] = 0.0;
-                self.d[i] = 0.0;
-                rankProblem = true;
-            } else {
-                ret[i] = self.rhs[i];
-                for j in i + 1..N {
-                    ret[i] = Self::smartAdd(ret[i], -self.r[i][j] * ret[j]);
-                }
-            }
-        }
-        if rankProblem {
-            for i in 0..N {
-                if self.lindep[i] {
-                    ret[i] = f64::NAN;
-                }
-            }
-        }
-        return ret;
-    }
-
-    /**
-     * Calculates the sum of squared errors for the full regression.
-     * and all subsets in the following manner: <pre>
-     * rss[] ={
-     * ResidualSumOfSquares_allNvars,
-     * ResidualSumOfSquares_FirstNvars-1,
-     * ResidualSumOfSquares_FirstNvars-2,
-     * ..., ResidualSumOfSquares_FirstVariable} </pre>
-     */
-    fn ss(&mut self) {
-        let mut total = self.sserr;
-        self.rss[N - 1] = self.sserr;
-        for i in (1..N - 1).rev() {
-            total += self.d[i] * self.rhs[i] * self.rhs[i];
-            self.rss[i - 1] = total;
-        }
-        self.rssSet = true;
-    }
-
-    /**
-     * Calculates the cov matrix assuming only the first nreq variables are
-     * included in the calculation. The returned array contains a symmetric
-     * matrix stored in lower triangular form. The matrix will have
-     * ( nreq + 1 ) * nreq / 2 elements. For illustration <pre>
-     * cov =
-     * {
-     *  cov_00,
-     *  cov_10, cov_11,
-     *  cov_20, cov_21, cov22,
-     *  ...
-     * } </pre>
-     *
-     * @param nreq how many of the regressors to include (either in canonical
-     * order, or in the current reordered state)
-     * @return an array with the variance covariance of the included
-     * regressors in lower triangular form
-     */
-    fn cov(&self) -> [[f64; N]; N] {
-        // if (this.nobs <= nreq) {
-        //     return null;
-        // }
-        let mut rnk = 0.0;
-        for i in 0..N {
-            if !self.lindep[i] {
-                rnk += 1.0;
-            }
-        }
-        let var = self.rss[N - 1] / (self.nobs as f64 - rnk);
-        let rinv = self.inverse();
-        let mut covmat = [[f64::NAN; N]; N];
-        for row in 0..N {
-            if !self.lindep[row] {
-                for col in row..N {
-                    if !self.lindep[col] {
-                        let mut total = if row == col {
-                            1.0 / self.d[col]
-                        } else {
-                            rinv[row][col] / self.d[col]
-                        };
-                        for k in col + 1..N {
-                            if !self.lindep[k] {
-                                total += rinv[row][k] * rinv[col][k] / self.d[k];
-                            }
-                        }
-                        covmat[row][col] = total * var;
-                        covmat[col][row] = total * var;
-                    }
-                }
-            }
-        }
-
-        covmat
-    }
-
-    /**
-     * This internal method calculates the inverse of the upper-triangular portion
-     * of the R matrix.
-     * @param rinv  the storage for the inverse of r
-     * @param nreq how many of the regressors to include (either in canonical
-     * order, or in the current reordered state)
-     */
-    fn inverse(&self) -> [[f64; N]; N] {
-        let mut rinv = [[f64::NAN; N]; N];
-        for col in 1..N {
-            if !self.lindep[col] {
-                for row in (0..col).rev() {
-                    if !self.lindep[row] {
-                        let mut total = 0.0;
-                        for k in row + 1..col {
-                            if !self.lindep[k] {
-                                total -= self.r[row][k] * rinv[k][col];
-                            }
-                        }
-                        rinv[row][col] = total - self.r[row][col];
-                    }
-                }
-            }
-        }
-
-        rinv
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct RegressionResult<const N: usize> {
     pub parameters: [f64; N],
-    pub varcov: [[f64; N]; N],
-    pub nobs: usize,
-    pub rank: i32,
-    pub sumy: f64,
-    pub sumysq: f64,
-    pub sse: f64,
+    pub covariance: [[f64; N]; N],
+    pub num_observations: usize,
+    pub rank: u32,
+    pub sum_y: f64,
+    pub sum_squared_y: f64,
+    pub sum_squared_errors: f64,
 }
 
 impl<const N: usize> RegressionResult<N> {
-    pub fn stderr(&self) -> [f64; N] {
-        let mut se = [f64::NAN; N];
-
-        for i in 0..self.parameters.len() {
-            let var = self.varcov[i][i];
+    pub fn standard_error(&self) -> [f64; N] {
+        core::array::from_fn(|i| {
+            let var = self.covariance[i][i];
             if !var.is_nan() && var > f64::MIN {
-                se[i] = var.sqrt();
+                var.sqrt()
+            } else {
+                f64::NAN
             }
-        }
-        se
+        })
     }
 
-    pub fn mse(&self) -> f64 {
-        self.sse / (self.nobs as f64 - self.rank as f64)
+    pub fn mean_squared_error(&self) -> f64 {
+        self.sum_squared_errors / (self.num_observations as f64 - self.rank as f64)
     }
 
-    pub fn sst(&self, has_constant: bool) -> f64 {
+    pub fn sum_of_squares_total(&self, has_constant: bool) -> f64 {
         if has_constant {
-            self.sumysq - self.sumy * self.sumy / self.nobs as f64
+            self.sum_squared_y - self.sum_y * self.sum_y / self.num_observations as f64
         } else {
-            self.sumysq
+            self.sum_squared_y
         }
     }
 
     pub fn r_squared(&self, has_constant: bool) -> f64 {
-        1.0 - self.sse / self.sst(has_constant)
+        1.0 - self.sum_squared_errors / self.sum_of_squares_total(has_constant)
     }
 
     pub fn adjusted_r_squared(&self, has_constant: bool) -> f64 {
         if has_constant {
-            let sst = self.sst(has_constant);
-            1.0 - (self.sse * (self.nobs as f64 - 1.0))
-                / (sst * (self.nobs as f64 - self.rank as f64))
+            1.0 - (self.sum_squared_errors * (self.num_observations as f64 - 1.0))
+                / (self.sum_of_squares_total(has_constant) * (self.num_observations as f64 - self.rank as f64))
         } else {
             let r_squared = self.r_squared(has_constant);
-            1.0 - (1.0 - r_squared) * (self.nobs as f64 / (self.nobs as f64 - self.rank as f64))
+            1.0 - (1.0 - r_squared) * (self.num_observations as f64 / (self.num_observations as f64 - self.rank as f64))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::iter::zip;
-
-    use crate::MillerUpdatingRegression;
-
-    #[test]
-    fn regress_airline() {
-        let data: [[f64; 90]; 6] = include!("datasets/air.in");
-        let mut instance = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
-
-        let mut x = [[0.0; 4]; 90];
-        let mut y = [0.0; 90];
-        for i in 0..data[0].len() {
-            x[i][0] = 1.0;
-            x[i][1] = data[3][i].ln();
-            x[i][2] = data[4][i].ln();
-            x[i][3] = data[5][i];
-            y[i] = data[2][i].ln();
-        }
-
-        for (xi, yi) in zip(x, y) {
-            instance.add_observation(xi, yi);
-        }
-        let result = instance.regress();
-
-        assert!(zip([9.5169, 0.8827, 0.4540, -1.6275], result.parameters)
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-4));
-        assert!(
-            zip([0.2292445, 0.0132545, 0.0203042, 0.345302], result.stderr())
-                .all(|(expected, actual)| (expected - actual).abs() < 1e-4)
-        );
-        assert!((0.01552839 - result.mse()).abs() < 1.0e-8);
-        assert!((0.9883 - result.r_squared(true)).abs() < 1.0e-4);
-    }
-
-    #[test]
-    fn filipelli() {
-        let data: [[f64; 82]; 2] = include!("datasets/filipelli.in");
-
-        let mut instance = MillerUpdatingRegression::<11>::empty(f64::EPSILON);
-        for i in 0..data[0].len() {
-            let x: [f64; 11] = core::array::from_fn(|j| data[1][i].powi(j as i32));
-            let y = data[0][i];
-
-            instance.add_observation(x, y);
-        }
-
-        let result = instance.regress();
-
-        assert!(zip(
-            [
-                -1467.48961422980,
-                -2772.17959193342,
-                -2316.37108160893,
-                -1127.97394098372,
-                -354.478233703349,
-                -75.1242017393757,
-                -10.8753180355343,
-                -1.06221498588947,
-                -0.670191154593408E-01,
-                -0.246781078275479E-02,
-                -0.402962525080404E-04
-            ],
-            result.parameters
-        )
-        .all(|(expected, actual)| ((expected - actual) / expected).abs() < 1e-6));
-
-        assert!(zip(
-            [
-                298.084530995537,
-                559.779865474950,
-                466.477572127796,
-                227.204274477751,
-                71.6478660875927,
-                15.2897178747400,
-                2.23691159816033,
-                0.221624321934227,
-                0.142363763154724E-01,
-                0.535617408889821E-03,
-                0.896632837373868E-05
-            ],
-            result.stderr()
-        )
-        .all(|(expected, actual)| ((expected - actual) / expected).abs() < 1e-6));
-
-        assert!((0.996727416185620 - result.r_squared(true)).abs() < 1.0e-10);
-        assert!((0.112091743968020E-04 - result.mse()).abs() < 1.0e-10);
-        assert!((0.795851382172941E-03 - result.sse).abs() < 1.0e-10);
-    }
-
-    #[test]
-    fn wampler1() {
-        let data: [f64; 42] = [
-            1.0, 0.0, 6.0, 1.0, 63.0, 2.0, 364.0, 3.0, 1365.0, 4.0, 3906.0, 5.0, 9331.0, 6.0,
-            19608.0, 7.0, 37449.0, 8.0, 66430.0, 9.0, 111111.0, 10.0, 177156.0, 11.0, 271453.0,
-            12.0, 402234.0, 13.0, 579195.0, 14.0, 813616.0, 15.0, 1118481.0, 16.0, 1508598.0, 17.0,
-            2000719.0, 18.0, 2613660.0, 19.0, 3368421.0, 20.0,
-        ];
-
-        let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
-        for i in 0..data.len() / 2 {
-            let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-            instance.add_observation(x, data[i * 2]);
-        }
-        let result = instance.regress();
-
-        assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], result.parameters)
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(zip([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], result.stderr())
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!((1.0 - result.r_squared(true)).abs() < 1.0e-10);
-        assert!((0.0 - result.mse()).abs() < 1.0e-8);
-        assert!((0.0 - result.sse).abs() < 1.0e-8);
-    }
-
-    #[test]
-    fn wampler2() {
-        let data: [f64; 42] = [
-            1.00000, 0.0, 1.11111, 1.0, 1.24992, 2.0, 1.42753, 3.0, 1.65984, 4.0, 1.96875, 5.0,
-            2.38336, 6.0, 2.94117, 7.0, 3.68928, 8.0, 4.68559, 9.0, 6.00000, 10.0, 7.71561, 11.0,
-            9.92992, 12.0, 12.75603, 13.0, 16.32384, 14.0, 20.78125, 15.0, 26.29536, 16.0,
-            33.05367, 17.0, 41.26528, 18.0, 51.16209, 19.0, 63.00000, 20.0,
-        ];
-
-        let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
-        for i in 0..data.len() / 2 {
-            let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-            instance.add_observation(x, data[i * 2]);
-        }
-        let result = instance.regress();
-
-        assert!(zip([1.0, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5], result.parameters)
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(zip([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], result.stderr())
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!((1.0 - result.r_squared(true)).abs() < 1.0e-10);
-        assert!((0.0 - result.mse()).abs() < 1.0e-8);
-        assert!((0.0 - result.sse).abs() < 1.0e-8);
-    }
-
-    #[test]
-    fn wampler3() {
-        let data: [f64; 42] = [
-            760.0, 0.0, -2042.0, 1.0, 2111.0, 2.0, -1684.0, 3.0, 3888.0, 4.0, 1858.0, 5.0, 11379.0,
-            6.0, 17560.0, 7.0, 39287.0, 8.0, 64382.0, 9.0, 113159.0, 10.0, 175108.0, 11.0,
-            273291.0, 12.0, 400186.0, 13.0, 581243.0, 14.0, 811568.0, 15.0, 1121004.0, 16.0,
-            1506550.0, 17.0, 2002767.0, 18.0, 2611612.0, 19.0, 3369180.0, 20.0,
-        ];
-
-        let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
-        for i in 0..data.len() / 2 {
-            let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-            instance.add_observation(x, data[i * 2]);
-        }
-        let result = instance.regress();
-
-        assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], result.parameters)
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(zip(
-            [
-                2152.32624678170,
-                2363.55173469681,
-                779.343524331583,
-                101.475507550350,
-                5.64566512170752,
-                0.112324854679312
-            ],
-            result.stderr()
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!((0.999995559025820 - result.r_squared(true)).abs() < 1.0e-10);
-        assert!((5570284.53333333 - result.mse()).abs() < 1.0e-7);
-        assert!((83554268.0000000 - result.sse).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn wampler4() {
-        let data: [f64; 42] = [
-            75901.0, 0.0, -204794.0, 1.0, 204863.0, 2.0, -204436.0, 3.0, 253665.0, 4.0, -200894.0,
-            5.0, 214131.0, 6.0, -185192.0, 7.0, 221249.0, 8.0, -138370.0, 9.0, 315911.0, 10.0,
-            -27644.0, 11.0, 455253.0, 12.0, 197434.0, 13.0, 783995.0, 14.0, 608816.0, 15.0,
-            1370781.0, 16.0, 1303798.0, 17.0, 2205519.0, 18.0, 2408860.0, 19.0, 3444321.0, 20.0,
-        ];
-
-        let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
-        for i in 0..data.len() / 2 {
-            let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-            instance.add_observation(x, data[i * 2]);
-        }
-        let result = instance.regress();
-
-        assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], result.parameters)
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(zip(
-            [
-                215232.624678170,
-                236355.173469681,
-                77934.3524331583,
-                10147.5507550350,
-                564.566512170752,
-                11.2324854679312
-            ],
-            result.stderr()
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!((0.957478440825662 - result.r_squared(true)).abs() < 1.0e-10);
-        assert!((55702845333.3333 - result.mse()).abs() < 1.0e-4);
-        assert!((835542680000.000 - result.sse).abs() < 1.0e-3);
-    }
-
-    #[test]
-    fn longley_with_constant() {
-        let data: [f64; 112] = include!("datasets/langley.in");
-
-        let mut instance = MillerUpdatingRegression::<7>::empty(f64::EPSILON);
-        for i in 0..data.len() / 7 {
-            let x: [f64; 7] = core::array::from_fn(|j| if j == 0 { 1.0 } else { data[i * 7 + j] });
-            instance.add_observation(x, data[i * 7]);
-        }
-        let result = instance.regress();
-
-        assert!(zip(
-            [
-                -3482258.63459582,
-                15.0618722713733,
-                -0.358191792925910E-01,
-                -2.02022980381683,
-                -1.03322686717359,
-                -0.511041056535807E-01,
-                1829.15146461355
-            ],
-            result.parameters
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(zip(
-            [
-                890420.383607373,
-                84.9149257747669,
-                0.334910077722432E-01,
-                0.488399681651699,
-                0.214274163161675,
-                0.226073200069370,
-                455.478499142212
-            ],
-            result.stderr()
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-6));
-        assert!((0.995479004577296 - result.r_squared(true)).abs() < 1.0e-12);
-        assert!((0.992465007628826 - result.adjusted_r_squared(true)).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn longley_without_constant() {
-        let data: [f64; 112] = include!("datasets/langley.in");
-
-        let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
-        for i in 0..data.len() / 7 {
-            let x: [f64; 6] = core::array::from_fn(|j| data[i * 7 + 1 + j]);
-            instance.add_observation(x, data[i * 7]);
-        }
-        let result = instance.regress();
-
-        assert!(zip(
-            [
-                -52.99357013868291,
-                0.07107319907358,
-                -0.42346585566399,
-                -0.57256866841929,
-                -0.41420358884978,
-                48.41786562001326
-            ],
-            result.parameters
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-11));
-        assert!(zip(
-            [
-                129.54486693117232,
-                0.03016640003786,
-                0.41773654056612,
-                0.27899087467676,
-                0.32128496193363,
-                17.68948737819961
-            ],
-            result.stderr()
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-11));
-        assert!((0.9999670130706 - result.r_squared(false)).abs() < 1.0e-12);
-        assert!((0.999947220913 - result.adjusted_r_squared(false)).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn redundant_column_1() {
-        let data: [[f64; 90]; 6] = include!("datasets/air.in");
-        let mut instance1 = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
-        let mut instance2 = MillerUpdatingRegression::<5>::empty(f64::EPSILON);
-
-        let mut x1 = [[0.0; 4]; 90];
-        let mut x2 = [[0.0; 5]; 90];
-        let mut y = [0.0; 90];
-        for i in 0..data[0].len() {
-            x1[i] = [1.0, data[3][i].ln(), data[4][i].ln(), data[5][i]];
-            x2[i] = [
-                1.0,
-                data[3][i].ln(),
-                data[4][i].ln(),
-                data[5][i],
-                data[5][i],
-            ];
-            y[i] = data[2][i].ln();
-        }
-
-        for (xi, yi) in zip(x1, y) {
-            instance1.add_observation(xi, yi);
-        }
-        let result1 = instance1.regress();
-
-        for (xi, yi) in zip(x2, y) {
-            instance2.add_observation(xi, yi);
-        }
-        let result2 = instance2.regress();
-
-        assert!(zip(result1.parameters, result2.parameters)
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(result2.parameters[4].is_nan());
-        assert!(
-            (result1.adjusted_r_squared(true) - result2.adjusted_r_squared(true)).abs() < 1.0e-8
-        );
-        assert!((result1.sse - result2.sse).abs() < 1.0e-8);
-        assert!((result1.mse() - result2.mse()).abs() < 1.0e-8);
-        assert!((result1.r_squared(true) - result2.r_squared(true)).abs() < 1.0e-8);
-    }
-
-    #[test]
-    fn redundant_column_3() {
-        let data: [[f64; 90]; 6] = include!("datasets/air.in");
-        let mut instance1 = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
-        let mut instance2 = MillerUpdatingRegression::<7>::empty(f64::EPSILON);
-
-        let mut x1 = [[0.0; 4]; 90];
-        let mut x2 = [[0.0; 7]; 90];
-        let mut y = [0.0; 90];
-        for i in 0..data[0].len() {
-            x1[i] = [1.0, data[3][i].ln(), data[4][i].ln(), data[5][i]];
-            x2[i] = [
-                1.0,
-                1.0,
-                data[3][i].ln(),
-                data[4][i].ln(),
-                data[3][i].ln(),
-                data[5][i],
-                data[4][i].ln(),
-            ];
-
-            y[i] = data[2][i].ln();
-        }
-
-        for (xi, yi) in zip(x1, y) {
-            instance1.add_observation(xi, yi);
-        }
-        let result1 = instance1.regress();
-
-        for (xi, yi) in zip(x2, y) {
-            instance2.add_observation(xi, yi);
-        }
-        let result2 = instance2.regress();
-
-        assert!(zip(
-            result1.parameters,
-            [
-                result2.parameters[0],
-                result2.parameters[2],
-                result2.parameters[3],
-                result2.parameters[5]
-            ]
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-        assert!(result2.parameters[1].is_nan());
-        assert!(result2.parameters[4].is_nan());
-        assert!(result2.parameters[6].is_nan());
-
-        assert!(zip(
-            result1.stderr(),
-            [
-                result2.stderr()[0],
-                result2.stderr()[2],
-                result2.stderr()[3],
-                result2.stderr()[5]
-            ]
-        )
-            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-
-        assert!(zip(
-            [
-                result1.varcov[0][0],
-                result1.varcov[0][1],
-                result1.varcov[0][2],
-                result1.varcov[0][3],
-                result1.varcov[1][0],
-                result1.varcov[1][1],
-                result1.varcov[1][2],
-                result1.varcov[2][0],
-                result1.varcov[2][1],
-                result1.varcov[3][3]
-            ],
-            [
-                result2.varcov[0][0],
-                result2.varcov[0][2],
-                result2.varcov[0][3],
-                result2.varcov[0][5],
-                result2.varcov[2][0],
-                result2.varcov[2][2],
-                result2.varcov[2][3],
-                result2.varcov[3][0],
-                result2.varcov[3][2],
-                result2.varcov[5][5]
-            ]
-        )
-        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-
-        assert!(
-            (result1.adjusted_r_squared(true) - result2.adjusted_r_squared(true)).abs() < 1.0e-8
-        );
-        assert!((result1.sse - result2.sse).abs() < 1.0e-8);
-        assert!((result1.mse() - result2.mse()).abs() < 1.0e-8);
-        assert!((result1.r_squared(true) - result2.r_squared(true)).abs() < 1.0e-8);
     }
 }
