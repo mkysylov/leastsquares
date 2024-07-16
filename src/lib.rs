@@ -194,7 +194,7 @@ impl<const N: usize> MillerUpdatingRegression<N> {
         for col in 1..N {
             let mut total = work_tolset[col];
             for row in 0..col {
-                total += self.r[row][col] * work_tolset[row];
+                total += self.r[row][col].abs() * work_tolset[row];
             }
             self.tol[col] = self.epsilon * total;
         }
@@ -346,6 +346,7 @@ impl<const N: usize> MillerUpdatingRegression<N> {
                                 total += rinv[row][k] * rinv[col][k] / self.d[k];
                             }
                         }
+                        covmat[row][col] = total * var;
                         covmat[col][row] = total * var;
                     }
                 }
@@ -364,16 +365,18 @@ impl<const N: usize> MillerUpdatingRegression<N> {
      */
     fn inverse(&self) -> [[f64; N]; N] {
         let mut rinv = [[f64::NAN; N]; N];
-        for row in (1..N).rev() {
-            if !self.lindep[row] {
-                for col in (row + 1..=N).rev() {
-                    let mut total = 0.0;
-                    for k in row..col - 1 {
-                        if !self.lindep[k] {
-                            total += -self.r[row - 1][k] * rinv[k][col - 1]
+        for col in 1..N {
+            if !self.lindep[col] {
+                for row in (0..col).rev() {
+                    if !self.lindep[row] {
+                        let mut total = 0.0;
+                        for k in row + 1..col {
+                            if !self.lindep[k] {
+                                total -= self.r[row][k] * rinv[k][col];
+                            }
                         }
+                        rinv[row][col] = total - self.r[row][col];
                     }
-                    rinv[row - 1][col - 1] = total - self.r[row - 1][col - 1]
                 }
             }
         }
@@ -723,5 +726,142 @@ mod tests {
         .all(|(expected, actual)| (expected - actual).abs() < 1e-11));
         assert!((0.9999670130706 - result.r_squared(false)).abs() < 1.0e-12);
         assert!((0.999947220913 - result.adjusted_r_squared(false)).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn redundant_column_1() {
+        let data: [[f64; 90]; 6] = include!("datasets/air.in");
+        let mut instance1 = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
+        let mut instance2 = MillerUpdatingRegression::<5>::empty(f64::EPSILON);
+
+        let mut x1 = [[0.0; 4]; 90];
+        let mut x2 = [[0.0; 5]; 90];
+        let mut y = [0.0; 90];
+        for i in 0..data[0].len() {
+            x1[i] = [1.0, data[3][i].ln(), data[4][i].ln(), data[5][i]];
+            x2[i] = [
+                1.0,
+                data[3][i].ln(),
+                data[4][i].ln(),
+                data[5][i],
+                data[5][i],
+            ];
+            y[i] = data[2][i].ln();
+        }
+
+        for (xi, yi) in zip(x1, y) {
+            instance1.add_observation(xi, yi);
+        }
+        let result1 = instance1.regress();
+
+        for (xi, yi) in zip(x2, y) {
+            instance2.add_observation(xi, yi);
+        }
+        let result2 = instance2.regress();
+
+        assert!(zip(result1.parameters, result2.parameters)
+            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
+        assert!(result2.parameters[4].is_nan());
+        assert!(
+            (result1.adjusted_r_squared(true) - result2.adjusted_r_squared(true)).abs() < 1.0e-8
+        );
+        assert!((result1.sse - result2.sse).abs() < 1.0e-8);
+        assert!((result1.mse() - result2.mse()).abs() < 1.0e-8);
+        assert!((result1.r_squared(true) - result2.r_squared(true)).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn redundant_column_3() {
+        let data: [[f64; 90]; 6] = include!("datasets/air.in");
+        let mut instance1 = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
+        let mut instance2 = MillerUpdatingRegression::<7>::empty(f64::EPSILON);
+
+        let mut x1 = [[0.0; 4]; 90];
+        let mut x2 = [[0.0; 7]; 90];
+        let mut y = [0.0; 90];
+        for i in 0..data[0].len() {
+            x1[i] = [1.0, data[3][i].ln(), data[4][i].ln(), data[5][i]];
+            x2[i] = [
+                1.0,
+                1.0,
+                data[3][i].ln(),
+                data[4][i].ln(),
+                data[3][i].ln(),
+                data[5][i],
+                data[4][i].ln(),
+            ];
+
+            y[i] = data[2][i].ln();
+        }
+
+        for (xi, yi) in zip(x1, y) {
+            instance1.add_observation(xi, yi);
+        }
+        let result1 = instance1.regress();
+
+        for (xi, yi) in zip(x2, y) {
+            instance2.add_observation(xi, yi);
+        }
+        let result2 = instance2.regress();
+
+        assert!(zip(
+            result1.parameters,
+            [
+                result2.parameters[0],
+                result2.parameters[2],
+                result2.parameters[3],
+                result2.parameters[5]
+            ]
+        )
+        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
+        assert!(result2.parameters[1].is_nan());
+        assert!(result2.parameters[4].is_nan());
+        assert!(result2.parameters[6].is_nan());
+
+        assert!(zip(
+            result1.stderr(),
+            [
+                result2.stderr()[0],
+                result2.stderr()[2],
+                result2.stderr()[3],
+                result2.stderr()[5]
+            ]
+        )
+            .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
+
+        assert!(zip(
+            [
+                result1.varcov[0][0],
+                result1.varcov[0][1],
+                result1.varcov[0][2],
+                result1.varcov[0][3],
+                result1.varcov[1][0],
+                result1.varcov[1][1],
+                result1.varcov[1][2],
+                result1.varcov[2][0],
+                result1.varcov[2][1],
+                result1.varcov[3][3]
+            ],
+            [
+                result2.varcov[0][0],
+                result2.varcov[0][2],
+                result2.varcov[0][3],
+                result2.varcov[0][5],
+                result2.varcov[2][0],
+                result2.varcov[2][2],
+                result2.varcov[2][3],
+                result2.varcov[3][0],
+                result2.varcov[3][2],
+                result2.varcov[5][5]
+            ]
+        )
+        .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
+
+        assert!(
+            (result1.adjusted_r_squared(true) - result2.adjusted_r_squared(true)).abs() < 1.0e-8
+        );
+        assert!((result1.sse - result2.sse).abs() < 1.0e-8);
+        assert!((result1.mse() - result2.mse()).abs() < 1.0e-8);
+        assert!((result1.r_squared(true) - result2.r_squared(true)).abs() < 1.0e-8);
     }
 }
