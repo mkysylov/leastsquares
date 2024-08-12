@@ -5,46 +5,45 @@ use crate::MillerUpdatingRegression;
 #[test]
 fn regress_airline() {
     let data: [[f64; 90]; 6] = include!("datasets/air.in");
-    let mut instance = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(3, true, f64::EPSILON);
 
-    let mut x = [[0.0; 4]; 90];
+    let mut x = [[0.0; 3]; 90];
     let mut y = [0.0; 90];
     for i in 0..data[0].len() {
-        x[i][0] = 1.0;
-        x[i][1] = data[3][i].ln();
-        x[i][2] = data[4][i].ln();
-        x[i][3] = data[5][i];
+        x[i][0] = data[3][i].ln();
+        x[i][1] = data[4][i].ln();
+        x[i][2] = data[5][i];
         y[i] = data[2][i].ln();
     }
 
     for (xi, yi) in zip(x, y) {
-        instance.add_observation(xi, yi);
+        instance.add_observation(&xi, yi).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
-    assert!(zip([9.5169, 0.8827, 0.4540, -1.6275], result.parameters)
+    assert!(zip([9.5169, 0.8827, 0.4540, -1.6275], &result.parameters)
         .all(|(expected, actual)| (expected - actual).abs() < 1e-4));
     assert!(
         zip([0.2292445, 0.0132545, 0.0203042, 0.345302], result.standard_error())
             .all(|(expected, actual)| (expected - actual).abs() < 1e-4)
     );
     assert!((0.01552839 - result.mean_squared_error()).abs() < 1.0e-8);
-    assert!((0.9883 - result.r_squared(true)).abs() < 1.0e-4);
+    assert!((0.9883 - result.r_squared()).abs() < 1.0e-4);
 }
 
 #[test]
 fn filipelli() {
     let data: [[f64; 82]; 2] = include!("datasets/filipelli.in");
 
-    let mut instance = MillerUpdatingRegression::<11>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(10, true, f64::EPSILON);
     for i in 0..data[0].len() {
-        let x: [f64; 11] = core::array::from_fn(|j| data[1][i].powi(j as i32));
+        let x: [f64; 10] = core::array::from_fn(|j| data[1][i].powi(j as i32 + 1));
         let y = data[0][i];
 
-        instance.add_observation(x, y);
+        instance.add_observation(&x, y).unwrap();
     }
 
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
     assert!(zip(
         [
@@ -60,7 +59,7 @@ fn filipelli() {
             -0.246781078275479E-02,
             -0.402962525080404E-04
         ],
-        result.parameters,
+        &result.parameters,
     ).all(|(expected, actual)| ((expected - actual) / expected).abs() < 1e-6));
 
     assert!(zip(
@@ -80,7 +79,7 @@ fn filipelli() {
         result.standard_error(),
     ).all(|(expected, actual)| ((expected - actual) / expected).abs() < 1e-6));
 
-    assert!((0.996727416185620 - result.r_squared(true)).abs() < 1.0e-10);
+    assert!((0.996727416185620 - result.r_squared()).abs() < 1.0e-10);
     assert!((0.112091743968020E-04 - result.mean_squared_error()).abs() < 1.0e-10);
     assert!((0.795851382172941E-03 - result.sum_squared_errors).abs() < 1.0e-10);
 }
@@ -94,18 +93,18 @@ fn wampler1() {
         2000719.0, 18.0, 2613660.0, 19.0, 3368421.0, 20.0,
     ];
 
-    let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(5, true, f64::EPSILON);
     for i in 0..data.len() / 2 {
-        let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-        instance.add_observation(x, data[i * 2]);
+        let x: [f64; 5] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32 + 1));
+        instance.add_observation(&x, data[i * 2]).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
-    assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], result.parameters)
+    assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], &result.parameters)
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
     assert!(zip([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], result.standard_error())
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-    assert!((1.0 - result.r_squared(true)).abs() < 1.0e-10);
+    assert!((1.0 - result.r_squared()).abs() < 1.0e-10);
     assert!((0.0 - result.mean_squared_error()).abs() < 1.0e-8);
     assert!((0.0 - result.sum_squared_errors).abs() < 1.0e-8);
 }
@@ -119,18 +118,18 @@ fn wampler2() {
         33.05367, 17.0, 41.26528, 18.0, 51.16209, 19.0, 63.00000, 20.0,
     ];
 
-    let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(5, true, f64::EPSILON);
     for i in 0..data.len() / 2 {
-        let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-        instance.add_observation(x, data[i * 2]);
+        let x: [f64; 5] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32 + 1));
+        instance.add_observation(&x, data[i * 2]).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
-    assert!(zip([1.0, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5], result.parameters)
+    assert!(zip([1.0, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5], &result.parameters)
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
     assert!(zip([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], result.standard_error())
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-    assert!((1.0 - result.r_squared(true)).abs() < 1.0e-10);
+    assert!((1.0 - result.r_squared()).abs() < 1.0e-10);
     assert!((0.0 - result.mean_squared_error()).abs() < 1.0e-8);
     assert!((0.0 - result.sum_squared_errors).abs() < 1.0e-8);
 }
@@ -144,14 +143,14 @@ fn wampler3() {
         1506550.0, 17.0, 2002767.0, 18.0, 2611612.0, 19.0, 3369180.0, 20.0,
     ];
 
-    let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(5, true, f64::EPSILON);
     for i in 0..data.len() / 2 {
-        let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-        instance.add_observation(x, data[i * 2]);
+        let x: [f64; 5] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32 + 1));
+        instance.add_observation(&x, data[i * 2]).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
-    assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], result.parameters)
+    assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], &result.parameters)
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
     assert!(zip(
         [
@@ -164,7 +163,7 @@ fn wampler3() {
         ],
         result.standard_error(),
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-    assert!((0.999995559025820 - result.r_squared(true)).abs() < 1.0e-10);
+    assert!((0.999995559025820 - result.r_squared()).abs() < 1.0e-10);
     assert!((5570284.53333333 - result.mean_squared_error()).abs() < 1.0e-7);
     assert!((83554268.0000000 - result.sum_squared_errors).abs() < 1.0e-6);
 }
@@ -178,14 +177,14 @@ fn wampler4() {
         1370781.0, 16.0, 1303798.0, 17.0, 2205519.0, 18.0, 2408860.0, 19.0, 3444321.0, 20.0,
     ];
 
-    let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(5, true, f64::EPSILON);
     for i in 0..data.len() / 2 {
-        let x: [f64; 6] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32));
-        instance.add_observation(x, data[i * 2]);
+        let x: [f64; 5] = core::array::from_fn(|j| data[i * 2 + 1].powi(j as i32 + 1));
+        instance.add_observation(&x, data[i * 2]).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
-    assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], result.parameters)
+    assert!(zip([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], &result.parameters)
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
     assert!(zip(
         [
@@ -198,7 +197,7 @@ fn wampler4() {
         ],
         result.standard_error(),
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-8));
-    assert!((0.957478440825662 - result.r_squared(true)).abs() < 1.0e-10);
+    assert!((0.957478440825662 - result.r_squared()).abs() < 1.0e-10);
     assert!((55702845333.3333 - result.mean_squared_error()).abs() < 1.0e-4);
     assert!((835542680000.000 - result.sum_squared_errors).abs() < 1.0e-3);
 }
@@ -207,12 +206,12 @@ fn wampler4() {
 fn longley_with_constant() {
     let data: [f64; 112] = include!("datasets/langley.in");
 
-    let mut instance = MillerUpdatingRegression::<7>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(6, true, f64::EPSILON);
     for i in 0..data.len() / 7 {
-        let x: [f64; 7] = core::array::from_fn(|j| if j == 0 { 1.0 } else { data[i * 7 + j] });
-        instance.add_observation(x, data[i * 7]);
+        let x: [f64; 6] = core::array::from_fn(|j| data[i * 7 + j + 1]);
+        instance.add_observation(&x, data[i * 7]).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
     assert!(zip(
         [
@@ -224,7 +223,7 @@ fn longley_with_constant() {
             -0.511041056535807E-01,
             1829.15146461355
         ],
-        result.parameters,
+        &result.parameters,
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-8));
     assert!(zip(
         [
@@ -238,20 +237,20 @@ fn longley_with_constant() {
         ],
         result.standard_error(),
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-6));
-    assert!((0.995479004577296 - result.r_squared(true)).abs() < 1.0e-12);
-    assert!((0.992465007628826 - result.adjusted_r_squared(true)).abs() < 1.0e-12);
+    assert!((0.995479004577296 - result.r_squared()).abs() < 1.0e-12);
+    assert!((0.992465007628826 - result.adjusted_r_squared()).abs() < 1.0e-12);
 }
 
 #[test]
 fn longley_without_constant() {
     let data: [f64; 112] = include!("datasets/langley.in");
 
-    let mut instance = MillerUpdatingRegression::<6>::empty(f64::EPSILON);
+    let mut instance = MillerUpdatingRegression::empty(6, false, f64::EPSILON);
     for i in 0..data.len() / 7 {
-        let x: [f64; 6] = core::array::from_fn(|j| data[i * 7 + 1 + j]);
-        instance.add_observation(x, data[i * 7]);
+        let x: [f64; 6] = core::array::from_fn(|j| data[i * 7 + j + 1]);
+        instance.add_observation(&x, data[i * 7]).unwrap();
     }
-    let result = instance.regress();
+    let result = instance.regress().unwrap();
 
     assert!(zip(
         [
@@ -262,7 +261,7 @@ fn longley_without_constant() {
             -0.41420358884978,
             48.41786562001326
         ],
-        result.parameters,
+        &result.parameters,
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-11));
     assert!(zip(
         [
@@ -275,23 +274,22 @@ fn longley_without_constant() {
         ],
         result.standard_error(),
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-11));
-    assert!((0.9999670130706 - result.r_squared(false)).abs() < 1.0e-12);
-    assert!((0.999947220913 - result.adjusted_r_squared(false)).abs() < 1.0e-12);
+    assert!((0.9999670130706 - result.r_squared()).abs() < 1.0e-12);
+    assert!((0.999947220913 - result.adjusted_r_squared()).abs() < 1.0e-12);
 }
 
 #[test]
 fn redundant_column_1() {
     let data: [[f64; 90]; 6] = include!("datasets/air.in");
-    let mut instance1 = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
-    let mut instance2 = MillerUpdatingRegression::<5>::empty(f64::EPSILON);
+    let mut instance1 = MillerUpdatingRegression::empty(3, true, f64::EPSILON);
+    let mut instance2 = MillerUpdatingRegression::empty(4, true, f64::EPSILON);
 
-    let mut x1 = [[0.0; 4]; 90];
-    let mut x2 = [[0.0; 5]; 90];
+    let mut x1 = [[0.0; 3]; 90];
+    let mut x2 = [[0.0; 4]; 90];
     let mut y = [0.0; 90];
     for i in 0..data[0].len() {
-        x1[i] = [1.0, data[3][i].ln(), data[4][i].ln(), data[5][i]];
+        x1[i] = [data[3][i].ln(), data[4][i].ln(), data[5][i]];
         x2[i] = [
-            1.0,
             data[3][i].ln(),
             data[4][i].ln(),
             data[5][i],
@@ -301,39 +299,38 @@ fn redundant_column_1() {
     }
 
     for (xi, yi) in zip(x1, y) {
-        instance1.add_observation(xi, yi);
+        instance1.add_observation(&xi, yi).unwrap();
     }
-    let result1 = instance1.regress();
+    let result1 = instance1.regress().unwrap();
 
     for (xi, yi) in zip(x2, y) {
-        instance2.add_observation(xi, yi);
+        instance2.add_observation(&xi, yi).unwrap();
     }
-    let result2 = instance2.regress();
+    let result2 = instance2.regress().unwrap();
 
-    assert!(zip(result1.parameters, result2.parameters)
+    assert!(zip(&result1.parameters, &result2.parameters)
         .all(|(expected, actual)| (expected - actual).abs() < 1e-8));
     assert!(result2.parameters[4].is_nan());
     assert!(
-        (result1.adjusted_r_squared(true) - result2.adjusted_r_squared(true)).abs() < 1.0e-8
+        (result1.adjusted_r_squared() - result2.adjusted_r_squared()).abs() < 1.0e-8
     );
     assert!((result1.sum_squared_errors - result2.sum_squared_errors).abs() < 1.0e-8);
     assert!((result1.mean_squared_error() - result2.mean_squared_error()).abs() < 1.0e-8);
-    assert!((result1.r_squared(true) - result2.r_squared(true)).abs() < 1.0e-8);
+    assert!((result1.r_squared() - result2.r_squared()).abs() < 1.0e-8);
 }
 
 #[test]
 fn redundant_column_3() {
     let data: [[f64; 90]; 6] = include!("datasets/air.in");
-    let mut instance1 = MillerUpdatingRegression::<4>::empty(f64::EPSILON);
-    let mut instance2 = MillerUpdatingRegression::<7>::empty(f64::EPSILON);
+    let mut instance1 = MillerUpdatingRegression::empty(3, true, f64::EPSILON);
+    let mut instance2 = MillerUpdatingRegression::empty(6, true, f64::EPSILON);
 
-    let mut x1 = [[0.0; 4]; 90];
-    let mut x2 = [[0.0; 7]; 90];
+    let mut x1 = [[0.0; 3]; 90];
+    let mut x2 = [[0.0; 6]; 90];
     let mut y = [0.0; 90];
     for i in 0..data[0].len() {
-        x1[i] = [1.0, data[3][i].ln(), data[4][i].ln(), data[5][i]];
+        x1[i] = [data[3][i].ln(), data[4][i].ln(), data[5][i]];
         x2[i] = [
-            1.0,
             1.0,
             data[3][i].ln(),
             data[4][i].ln(),
@@ -346,17 +343,17 @@ fn redundant_column_3() {
     }
 
     for (xi, yi) in zip(x1, y) {
-        instance1.add_observation(xi, yi);
+        instance1.add_observation(&xi, yi).unwrap();
     }
-    let result1 = instance1.regress();
+    let result1 = instance1.regress().unwrap();
 
     for (xi, yi) in zip(x2, y) {
-        instance2.add_observation(xi, yi);
+        instance2.add_observation(&xi, yi).unwrap();
     }
-    let result2 = instance2.regress();
+    let result2 = instance2.regress().unwrap();
 
     assert!(zip(
-        result1.parameters,
+        &result1.parameters,
         [
             result2.parameters[0],
             result2.parameters[2],
@@ -378,51 +375,102 @@ fn redundant_column_3() {
         ],
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-8));
 
+    println!("{:?}", [
+        result1.covariance(0, 0),
+        result1.covariance(0, 1),
+        result1.covariance(0, 2),
+        result1.covariance(0, 3),
+        result1.covariance(1, 0),
+        result1.covariance(1, 1),
+        result1.covariance(1, 2),
+        result1.covariance(2, 0),
+        result1.covariance(2, 1),
+        result1.covariance(3, 3),
+    ]);
+
+    println!("{:?}", [
+        result2.covariance(0, 0),
+        result2.covariance(0, 2),
+        result2.covariance(0, 3),
+        result2.covariance(0, 5),
+        result2.covariance(2, 0),
+        result2.covariance(2, 2),
+        result2.covariance(2, 3),
+        result2.covariance(3, 0),
+        result2.covariance(3, 2),
+        result2.covariance(5, 5),
+    ]);
+
+    println!("{} {:?}", result2.covariance.size(), result2.covariance.0);
+
     assert!(zip(
         [
-            result1.covariance[0][0],
-            result1.covariance[0][1],
-            result1.covariance[0][2],
-            result1.covariance[0][3],
-            result1.covariance[1][0],
-            result1.covariance[1][1],
-            result1.covariance[1][2],
-            result1.covariance[2][0],
-            result1.covariance[2][1],
-            result1.covariance[3][3]
+            result1.covariance(0, 0),
+            result1.covariance(0, 1),
+            result1.covariance(0, 2),
+            result1.covariance(0, 3),
+            result1.covariance(1, 0),
+            result1.covariance(1, 1),
+            result1.covariance(1, 2),
+            result1.covariance(2, 0),
+            result1.covariance(2, 1),
+            result1.covariance(3, 3),
         ],
         [
-            result2.covariance[0][0],
-            result2.covariance[0][2],
-            result2.covariance[0][3],
-            result2.covariance[0][5],
-            result2.covariance[2][0],
-            result2.covariance[2][2],
-            result2.covariance[2][3],
-            result2.covariance[3][0],
-            result2.covariance[3][2],
-            result2.covariance[5][5]
+            result2.covariance(0, 0),
+            result2.covariance(0, 2),
+            result2.covariance(0, 3),
+            result2.covariance(0, 5),
+            result2.covariance(2, 0),
+            result2.covariance(2, 2),
+            result2.covariance(2, 3),
+            result2.covariance(3, 0),
+            result2.covariance(3, 2),
+            result2.covariance(5, 5),
         ],
     ).all(|(expected, actual)| (expected - actual).abs() < 1e-8));
 
     assert!([
-        result2.covariance[0][1],
-        result2.covariance[0][4],
-        result2.covariance[1][0],
-        result2.covariance[1][1],
-        result2.covariance[1][2],
-        result2.covariance[1][3],
-        result2.covariance[1][4],
-        result2.covariance[2][1],
-        result2.covariance[3][1],
-        result2.covariance[4][0],
-        result2.covariance[4][1],
+        result2.covariance(0, 1),
+        result2.covariance(0, 4),
+        result2.covariance(0, 6),
+        result2.covariance(1, 0),
+        result2.covariance(1, 1),
+        result2.covariance(1, 2),
+        result2.covariance(1, 3),
+        result2.covariance(1, 4),
+        result2.covariance(1, 5),
+        result2.covariance(1, 6),
+        result2.covariance(2, 1),
+        result2.covariance(2, 4),
+        result2.covariance(2, 6),
+        result2.covariance(3, 1),
+        result2.covariance(3, 4),
+        result2.covariance(3, 6),
+        result2.covariance(4, 0),
+        result2.covariance(4, 1),
+        result2.covariance(4, 2),
+        result2.covariance(4, 3),
+        result2.covariance(4, 4),
+        result2.covariance(4, 5),
+        result2.covariance(4, 6),
+        result2.covariance(5, 1),
+        result2.covariance(5, 4),
+        result2.covariance(5, 6),
+        result2.covariance(6, 0),
+        result2.covariance(6, 1),
+        result2.covariance(6, 2),
+        result2.covariance(6, 3),
+        result2.covariance(6, 4),
+        result2.covariance(6, 5),
+        result2.covariance(6, 6),
     ].iter().all(|x| x.is_nan()));
 
     assert!(
-        (result1.adjusted_r_squared(true) - result2.adjusted_r_squared(true)).abs() < 1.0e-8
+        (result1.adjusted_r_squared() - result2.adjusted_r_squared()).abs() < 1.0e-8
     );
     assert!((result1.sum_squared_errors - result2.sum_squared_errors).abs() < 1.0e-8);
     assert!((result1.mean_squared_error() - result2.mean_squared_error()).abs() < 1.0e-8);
-    assert!((result1.r_squared(true) - result2.r_squared(true)).abs() < 1.0e-8);
+    assert!((result1.r_squared() - result2.r_squared()).abs() < 1.0e-8);
+    assert!((result1.r_squared() - result2.r_squared()).abs() < 1.0e-8);
 }
