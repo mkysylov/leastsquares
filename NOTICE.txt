@@ -1,0 +1,8 @@
+leastsquares
+Copyright 2024 Maksym Kysylov
+
+This product includes software developed by
+Maksym Kysylov (https://github.com/mkysylov/).
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
