@@ -1,6 +1,15 @@
 [package]
 name = "leastsquares"
 version = "0.1.0"
+authors = ["Maksym Kysylov"]
 edition = "2021"
+description = "Miller Updating Regression"
+readme = "README.md"
+homepage = "https://github.com/mkysylov/leastsquares"
+repository = "https://github.com/mkysylov/leastsquares"
+license = "Apache-2.0"
+keywords = ["ols", "regression"]
+categories = ["science"]
+exclude = ["datasets/", "src/tests.rs"]
 
 [dependencies]
